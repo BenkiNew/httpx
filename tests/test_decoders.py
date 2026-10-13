@@ -198,7 +198,10 @@ async def test_streaming():
         content=compress(body),
     )
     assert not hasattr(response, "body")
-    assert await response.aread() == body
+    try:
+        assert await response.aread() == body
+    finally:
+        await response.aclose()
 
 
 @pytest.mark.parametrize("header_value", (b"deflate", b"gzip", b"br", b"identity"))
@@ -353,3 +356,39 @@ def test_invalid_content_encoding_header():
         content=body,
     )
     assert response.content == body
+
+
+@pytest.mark.parametrize("wbits", [-zlib.MAX_WBITS, zlib.MAX_WBITS])
+@pytest.mark.parametrize("body", [b"", b"test 123", bytes(range(256)) * 8])
+@pytest.mark.parametrize("chunk_size", [1, 2, 3])
+def test_deflate_fragmented(wbits, body, chunk_size):
+    compressor = zlib.compressobj(wbits=wbits)
+    compressed = compressor.compress(body) + compressor.flush()
+    chunks = (
+        compressed[i : i + chunk_size] for i in range(0, len(compressed), chunk_size)
+    )
+    response = httpx.Response(
+        200, headers={"Content-Encoding": "deflate"}, content=chunks
+    )
+    assert response.read() == body
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("wbits", [-zlib.MAX_WBITS, zlib.MAX_WBITS])
+@pytest.mark.parametrize("body", [b"", b"test 123", bytes(range(256)) * 8])
+@pytest.mark.parametrize("chunk_size", [1, 2, 3])
+async def test_deflate_fragmented_async(wbits, body, chunk_size):
+    compressor = zlib.compressobj(wbits=wbits)
+    compressed = compressor.compress(body) + compressor.flush()
+
+    async def chunks() -> typing.AsyncIterator[bytes]:
+        for i in range(0, len(compressed), chunk_size):
+            yield compressed[i : i + chunk_size]
+
+    response = httpx.Response(
+        200, headers={"Content-Encoding": "deflate"}, content=chunks()
+    )
+    try:
+        assert await response.aread() == body
+    finally:
+        await response.aclose()
