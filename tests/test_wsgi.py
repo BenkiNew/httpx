@@ -201,3 +201,25 @@ def test_wsgi_server_protocol():
     assert response.status_code == 200
     assert response.text == "success"
     assert server_protocol == "HTTP/1.1"
+
+
+@pytest.mark.parametrize(
+    "path,expected",
+    [
+        ("/café", b"/caf\xc3\xa9"),
+        ("/中", b"/\xe4\xb8\xad"),
+        ("/caf%C3%A9", b"/caf\xc3\xa9"),
+        ("/%FF", b"/\xff"),
+        ("/a%2Fb", b"/a/b"),
+        ("/a%252Fb", b"/a%2Fb"),
+        ("/café?q=%C3%A9", b"/caf\xc3\xa9"),
+    ],
+)
+def test_wsgi_path_info_preserves_url_bytes(path, expected):
+    def application(environ, start_response):
+        start_response("200 OK", [("Content-Type", "application/octet-stream")])
+        return [environ["PATH_INFO"].encode("latin-1")]
+
+    with httpx.Client(transport=httpx.WSGITransport(app=application)) as client:
+        response = client.get("http://testserver" + path)
+    assert response.content == expected
